@@ -39,6 +39,15 @@ DEFAULT_RATE = 0.0043
 # Max characters of file name to show in per‑file log line
 NAME_WIDTH = 55
 
+# Max concurrent connections for Deepgram Nova-3 pre-recorded
+MAX_CONCURRENCY = 100
+
+# Number of retries for failed requests
+MAX_RETRIES = 3
+
+# Delay between retries (in seconds)
+RETRY_DELAY = 2
+
 
 # --------------------------------------------------------------------------- #
 # Progress bar
@@ -115,13 +124,21 @@ async def transcribe_one(
         payload: FileSource = {"buffer": f.read()}
 
     opts = PrerecordedOptions(model="nova-3", smart_format=True)
-    resp = await client.listen.asyncrest.v("1").transcribe_file(
-        payload, opts, timeout=httpx.Timeout(timeout, connect=10)
-    )
-    data = json.loads(resp.to_json())
-    transcript = data["results"]["channels"][0]["alternatives"][0]["transcript"]
-    duration = data.get("metadata", {}).get("duration", 0.0)  # seconds
-    return transcript, float(duration)
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = await client.listen.asyncrest.v("1").transcribe_file(
+                payload, opts, timeout=httpx.Timeout(timeout, connect=30)
+            )
+            data = json.loads(resp.to_json())
+            transcript = data["results"]["channels"][0]["alternatives"][0]["transcript"]
+            duration = data.get("metadata", {}).get("duration", 0.0)  # seconds
+            return transcript, float(duration)
+        except Exception as e:
+            if attempt < MAX_RETRIES - 1:
+                await asyncio.sleep(RETRY_DELAY)
+            else:
+                raise Exception(f"Failed after {MAX_RETRIES} attempts: {e}")
 
 
 async def worker(
@@ -173,6 +190,12 @@ async def run(
     client = dg_client()
     rate_per_min = float(os.getenv("DG_RATE_PER_MIN", DEFAULT_RATE))
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if concurrency > MAX_CONCURRENCY:
+        print(
+            f"\nNOTE: Reducing concurrency from {concurrency} to {MAX_CONCURRENCY} (Deepgram's limit)"
+        )
+        concurrency = MAX_CONCURRENCY
 
     queue: list[tuple[Path, Path]] = []
     for f in sorted(input_dir.iterdir()):
