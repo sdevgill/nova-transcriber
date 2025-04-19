@@ -188,7 +188,12 @@ async def run(
         print("Nothing to do – already transcribed or nothing found.")
         return
 
+    run_start = time.perf_counter()
+
     sem = asyncio.Semaphore(concurrency)
+
+    print(f"\nStarting transcription...\nProcessing {len(queue)} files...\n")
+
     with make_bar(progress, len(queue)) as bar:
         tasks = [
             asyncio.create_task(
@@ -198,15 +203,15 @@ async def run(
         ]
         results = await asyncio.gather(*tasks)
 
-    total_elapsed = sum(r[0] for r in results)
+    run_elapsed = time.perf_counter() - run_start
+
     total_audio = sum(r[1] for r in results)
     total_cost = sum(r[2] for r in results)
 
     print(
-        f"\n"
         f"\nProcessed {len(queue)} files | "
         f"{total_audio/60:.2f} min audio | "
-        f"elapsed {total_elapsed:.1f}s | "
+        f"elapsed {run_elapsed:.1f}s | "
         f"cost ${total_cost:.4f}"
     )
 
